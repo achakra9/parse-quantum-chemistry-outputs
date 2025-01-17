@@ -48,7 +48,18 @@ def proceed_further(f):
         if 'eominp' or 'EOMINP' in line:
             return True
     else:
-        return False            
+        return False   
+    
+# Type of Calculation
+def get_calc(f):
+    pattern = re.compile(r"BEGINNING\s+(.*?)\s+ITERATIONS\s+FOR\s+STATE\s+(\d+)", re.IGNORECASE)
+    for line in f:
+        match=pattern.search(line)
+        if match:
+            info=match.group(1)
+            break
+               
+    return info
         
 def main():
     if len(sys.argv) < 2:
@@ -94,10 +105,10 @@ def main():
         sys.exit(0)
         
     print("proceeding with further extractions.")
+    calc = get_calc(f)
+    print(f"{calc} calculation performed")
          
-    
-       
-    
+         
 if __name__ == "__main__":
     main()
     
