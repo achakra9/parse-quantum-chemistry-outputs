@@ -2,7 +2,9 @@
 
 """
 Current features:
-    (1) Extract Reference (SCF) energy
+    (1) Reference (SCF) energy
+    (2) CCSD energy
+    (3) Point Group symmetry
 """
 
 import sys
@@ -39,7 +41,14 @@ def get_pointgroup(f):
     pg = pg.replace("N",y[7])
      
     return pg
-                
+
+# further parsing
+def proceed_further(f):
+    for line in f:
+        if 'eominp' or 'EOMINP' in line:
+            return True
+    else:
+        return False            
         
 def main():
     if len(sys.argv) < 2:
@@ -75,6 +84,18 @@ def main():
     # extract point group symmetry
     pg = get_pointgroup(f) 
     print(f"POINT GROUP SYMMETRY: {pg}")
+    
+    # Check if further parsing is needed
+    stat = proceed_further(f)
+    if stat:
+        print("EXCITED STATE CALCULATION WAS PERFORMED")
+    else:
+        print("DONE WITH ALL PARSING")
+        sys.exit(0)
+        
+    print("proceeding with further extractions.")
+         
+    
        
     
 if __name__ == "__main__":
