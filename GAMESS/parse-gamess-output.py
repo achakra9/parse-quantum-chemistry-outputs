@@ -9,6 +9,7 @@ Current features:
 
 import sys
 import re
+import pandas as pd
 
 # Reference
 def get_reference(f):
@@ -160,6 +161,41 @@ def parse_eom_states(f):
                 in_eom_summary = False
 
     return eom_states
+
+# get amplitudes
+def get_amplitudes(f):
+    matches = []
+    # Regex pattern to match the specified line
+    pattern = re.compile(r"NO\.\s+\d+\s+SELECTED STATE:\s+\d+\s+EIGENVALUE:", re.IGNORECASE)
+    counter=0
+    for idx, line in enumerate(f):
+        if pattern.search(line):
+            target_line_num = idx + 2  # Third line after the matched line
+            counter += 1
+            if target_line_num < len(f):
+                extracted_info1 = f[target_line_num].split(':')
+                extracted_info1.pop()
+                extracted_info1 = list(extracted_info1)
+                extracted_info2 = extracted_info1[0].split()
+                amps=[]
+                for element in extracted_info2:
+                    # extracted_info.pop()
+                    amps.append(int(element[:-1]))
+                    
+                matches.append((amps))  # (Matched Line Number, Extracted Info)
+                # print(f"[DEBUG] Found match on line {idx + 1}. Extracted info from line {target_line_num + 1}: {amps}")
+            else:
+                print(f"[WARNING] Matched line {idx + 1} does not have two lines following it.")
+    
+    if not matches:
+        print("No 'NO.   XX SELECTED STATE:    XX EIGENVALUE:' lines found.")
+    
+    return matches
+
+def create_character_table(point_group_name, irreps, operations, characters):
+    data = {op: chars for op, chars in zip(operations, zip(*characters))}
+    df = pd.DataFrame(data, index=irreps)
+    return df
         
 def main():
     if len(sys.argv) < 2:
@@ -192,6 +228,100 @@ def main():
     pg = get_pointgroup(f) 
     print(f"POINT GROUP SYMMETRY: {pg}")
     #
+    # Define character tables
+    character_tables = {}
+
+    # C1
+    C1_irr = ['A']
+    C1_ops = ['E']
+    C1_chars = [
+        [1]  # Characters for A
+    ]
+    C1 = create_character_table('C1', C1_irr, C1_ops, C1_chars)
+    character_tables['C1'] = C1
+
+    # C2
+    C2_irr = ['A', 'B']
+    C2_ops = ['E', 'C2']
+    C2_chars = [
+        [1, 1],  # Characters for A
+        [1, -1]  # Characters for B
+    ]
+    C2 = create_character_table('C2', C2_irr, C2_ops, C2_chars)
+    character_tables['C2'] = C2
+
+    # Ci
+    Ci_irr = ['A_g', 'A_u']
+    Ci_ops = ['E', 'i']
+    Ci_chars = [
+        [1, 1],   # Characters for A_g
+        [1, -1]   # Characters for A_u
+    ]
+    Ci = create_character_table('Ci', Ci_irr, Ci_ops, Ci_chars)
+    character_tables['CI'] = Ci
+
+    # Cs
+    Cs_irr = ["A'", "A''"]
+    Cs_ops = ['E', 'σ']
+    Cs_chars = [
+        [1, 1],   # Characters for A'
+        [1, -1]   # Characters for A''
+    ]
+    Cs = create_character_table('Cs', Cs_irr, Cs_ops, Cs_chars)
+    character_tables['CS'] = Cs
+
+    # C2v
+    C2v_irr = ['A1', 'A2', 'B1', 'B2']
+    C2v_ops = ['E', 'C2', 'σ_v', "σ'_v"]
+    C2v_chars = [
+        [1, 1, 1, 1],    # Characters for A1
+        [1, 1, -1, -1],  # Characters for A2
+        [1, -1, 1, -1],  # Characters for B1
+        [1, -1, -1, 1]    # Characters for B2
+    ]
+    C2v = create_character_table('C2v', C2v_irr, C2v_ops, C2v_chars)
+    character_tables['C2V'] = C2v
+
+    # C2h
+    C2h_irr = ['A_g', 'B_g', 'A_u', 'B_u']
+    C2h_ops = ['E', 'C2', 'i', 'σ_h']
+    C2h_chars = [
+        [1, 1, 1, 1],    # Characters for A_g
+        [1, -1, 1, -1],  # Characters for B_g
+        [1, 1, -1, -1],  # Characters for A_u
+        [1, -1, -1, 1]    # Characters for B_u
+    ]
+    C2h = create_character_table('C2h', C2h_irr, C2h_ops, C2h_chars)
+    character_tables['C2H'] = C2h
+
+    # D2
+    D2_irr = ['A', 'B1', 'B2', 'B3']
+    D2_ops = ['E', 'C2(z)', 'C2(y)', 'C2(x)']
+    D2_chars = [
+        [1, 1, 1, 1],      # Characters for A
+        [1, -1, 1, -1],    # Characters for B1
+        [1, 1, -1, -1],    # Characters for B2
+        [1, -1, -1, 1]      # Characters for B3
+    ]
+    D2 = create_character_table('D2', D2_irr, D2_ops, D2_chars)
+    character_tables['D2'] = D2
+
+    # D2h
+    D2h_irr = ['A_g', 'B1_g', 'B2_g', 'B3_g', 'A_u', 'B1_u', 'B2_u', 'B3_u']
+    D2h_ops = ['E', 'C2(z)', 'C2(y)', 'C2(x)', 'i', 'σ_h', 'σ_d', "σ'_d"]
+    D2h_chars = [
+        [1, 1, 1, 1, 1, 1, 1, 1],      # Characters for A_g
+        [1, -1, 1, -1, -1, -1, 1, -1],# Characters for B1_g
+        [1, 1, -1, -1, 1, 1, -1, 1],  # Characters for B2_g
+        [1, -1, -1, 1, -1, -1, 1, -1],# Characters for B3_g
+        [1, 1, 1, 1, -1, -1, -1, 1],  # Characters for A_u
+        [1, -1, 1, -1, 1, 1, -1, -1], # Characters for B1_u
+        [1, 1, -1, -1, -1, -1, 1, 1], # Characters for B2_u
+        [1, -1, -1, 1, 1, 1, 1, -1]    # Characters for B3_u
+    ]
+    D2h = create_character_table('D2h', D2h_irr, D2h_ops, D2h_chars)
+    character_tables['D2H'] = D2h
+    #
     # Print MO energies & irreps
     energies, irreps = parse_mo_data(f)
     print("\nMolecular Orbitals (energy + irrep):")
@@ -218,18 +348,18 @@ def main():
     calc = get_calc(f)
     print(f"{calc} calculation performed")
     
-    #Print EOM states
+    # Print EOM states
     eom_states=parse_eom_states(f)
+    amps = get_amplitudes(f)
+
+    # print(eom_states)
     print(f"=== {calc} States (for DIP, DEA, IP, EA, etc.) ===")
-    if not eom_states:
-        print("No EOM states found in output.")
-    else:
-        print(f"{'State':>5s}  {'mult':>4s}  {'omega (H)':>12s}  {'Total_E (H)':>14s}")
-        for st_idx, sp_mult, ion_en, tot_en in eom_states:
-            print(f"{st_idx:5d}  {sp_mult:4d}  {ion_en:12.6f}  {tot_en:14.6f}")
-            
-    
-         
+    cols=['State', 'mult', 'omega (H)', 'Total E (H)']
+    df_eom=pd.DataFrame(eom_states, columns=cols)
+    print(df_eom)
+    df_eom['amplitudes']=amps
+    print(df_eom)
+                 
          
 if __name__ == "__main__":
     main()
