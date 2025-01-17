@@ -1,17 +1,11 @@
 #!/usr/bin/env python3
 """
-Parse a GAMESS output file and extract:
-1) Reference (SCF) energy
-2) CCSD total energy
-3) MO energies and irreps from the MO block,
-   labeled as "EIGENVECTOR(S)" or "MOLECULAR ORBITALS"
-   or something similar.
-
-Modifications made:
-- We look for any line containing "EIGENVECTOR" or "MOLECULAR ORBITALS"
-  (case-insensitive).
-- We DO NOT immediately exit the block upon seeing lines with "-----".
-- We allow a more flexible irreps regex pattern for lines like B2U(1).
+Parse a GAMESS output file for:
+  (1) Reference (SCF) energy
+  (2) CCSD total energy
+  (3) Point group
+  (4) Order of principal axis, and replace 'N' in the point group with this number
+  (5) MO energies + irreps from EIGENVECTOR or MOLECULAR ORBITALS block
 """
 
 import sys
@@ -19,46 +13,63 @@ import re
 
 def parse_gamess_output(filename):
     # -------------------------------------------------------------------
-    # 1) Regex patterns for SCF and CCSD energies
+    # Regex patterns
     # -------------------------------------------------------------------
+    # 1) Reference (SCF) energy
     re_ref = re.compile(
         r"(?:FINAL\s+(?:ROHF|UHF|HF)\s+ENERGY\s+IS\s+|\bREFERENCE ENERGY:\s+)([-\d\.]+)",
         re.IGNORECASE
     )
+
+    # 2) CCSD total energy
     re_ccsd = re.compile(
         r"^\s*CCSD\s+ENERGY:\s+([-\d\.]+)",
         re.IGNORECASE
     )
 
-    reference_energy = None
-    ccsd_energy = None
+    # 3) Point group, e.g. "THE POINT GROUP OF THE MOLECULE IS DNH"
+    re_pg = re.compile(
+        r"THE\s+POINT\s+GROUP\s+OF\s+THE\s+MOLECULE\s+IS\s+(\S+)",
+        re.IGNORECASE
+    )
 
-    # -------------------------------------------------------------------
-    # 2) Collect MO energies & irreps
-    # -------------------------------------------------------------------
+    # 4) Order of principal axis, e.g. "THE ORDER OF THE PRINCIPAL AXIS IS 2"
+    # We'll capture the integer (\d+)
+    re_axis_order = re.compile(
+        r"THE\s+ORDER\s+OF\s+THE\s+PRINCIPAL\s+AXIS\s+IS\s+(\d+)",
+        re.IGNORECASE
+    )
+
+    # Initialize data variables
+    reference_energy = None
+    ccsd_energy      = None
+    point_group      = None
+    axis_order_str   = None  # store the axis order as a string (so we can replace easily)
+
+    # We'll store MO energies & irreps as in earlier scripts
     mo_energies = []
     mo_irreps   = []
 
     in_mo_block     = False
     energies_buffer = None
 
-    # Let's allow scientific notation, e.g. -2.01E+01, etc.
+    # -------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------
     def parse_float_line(line):
+        # Attempt to parse all tokens as floats, handling 'D' exponent
         tokens = line.split()
         floats = []
         for t in tokens:
-            # We'll try a broader approach
-            # e.g. -1.2345e+01
+            t_for_exp = t.replace('D', 'E')
             try:
-                val = float(t.replace('D','E'))  # if there's a D for exponent
+                val = float(t_for_exp)
                 floats.append(val)
             except ValueError:
                 return None
         return floats
 
-    # We expand the irreps pattern to handle variations like "B1U", "B2g(2)"
-    # Rough pattern: starts with A or B, optional digit, then g/u, plus optional (digit).
-    # e.g. AG, B1U, B2g, B2U(1), B2G(3), etc.
+    # Irreps like "AG", "B1U", "B2g", "B2U(1)", etc.
     irreps_pattern = re.compile(r"^[AB]\d?[g-uG-U](?:\(\d+\))?$")
 
     def line_is_irrep_list(line):
@@ -71,58 +82,65 @@ def parse_gamess_output(filename):
         return True
 
     # -------------------------------------------------------------------
-    # 3) File reading
+    # Reading the file
     # -------------------------------------------------------------------
     with open(filename, 'r') as f:
         for line in f:
-            # a) Check reference energy
-            match_ref = re_ref.search(line)
-            if match_ref:
-                reference_energy = float(match_ref.group(1))
+            # 1) Check reference energy
+            m_ref = re_ref.search(line)
+            if m_ref:
+                reference_energy = float(m_ref.group(1))
 
-            # b) Check CCSD energy
-            match_ccsd = re_ccsd.search(line)
-            if match_ccsd:
-                ccsd_energy = float(match_ccsd.group(1))
+            # 2) Check CCSD energy
+            m_ccsd = re_ccsd.search(line)
+            if m_ccsd:
+                ccsd_energy = float(m_ccsd.group(1))
 
-            # c) Check if line starts the MO block
-            #    e.g. "EIGENVECTOR", "EIGENVECTORS", or "MOLECULAR ORBITALS" in uppercase
+            # 3) Check for point group
+            m_pg = re_pg.search(line)
+            if m_pg:
+                point_group = m_pg.group(1).upper().strip()
+
+            # 4) Check for order of principal axis
+            m_ax = re_axis_order.search(line)
+            if m_ax:
+                axis_order_str = m_ax.group(1).strip()  # e.g. "2"
+
+            # 5) Detect MO block lines: "EIGENVECTOR(S)" or "MOLECULAR ORBITALS"
             upper_line = line.upper()
             if ("EIGENVECTOR" in upper_line) or ("MOLECULAR ORBITALS" in upper_line):
-                in_mo_block     = True
+                in_mo_block = True
                 energies_buffer = None
                 continue
 
-            # d) If we are in the MO block, parse lines
+            # If inside MO block
             if in_mo_block:
                 raw = line.strip()
-                # If blank, skip
                 if not raw:
                     continue
 
-                # Attempt floats
                 float_vals = parse_float_line(raw)
                 if float_vals is not None and len(float_vals) > 0:
-                    # This is an energies line
                     energies_buffer = float_vals
                     continue
 
-                # Possibly irreps line
                 if line_is_irrep_list(raw):
                     tokens = raw.split()
-                    # Pair with energies
                     if energies_buffer and len(tokens) == len(energies_buffer):
                         mo_energies.extend(energies_buffer)
                         mo_irreps.extend(tokens)
-                        energies_buffer = None
+                    energies_buffer = None
                     continue
+                # else: ignore lines that don't match energies or irreps
 
-                # If line is something else (maybe "Occupied Orbitals" or "Vectors"?),
-                # we do nothing. We do NOT break out. Because in many outputs,
-                # dashed lines occur or there's more content after.
-                # If you'd like to break at some prompt, you can add logic here.
+    # -------------------------------------------------------------------
+    # If there's an axis order, and the point_group has "N", replace it
+    # e.g. "DNH" => "D2H" if axis_order_str="2"
+    # -------------------------------------------------------------------
+    if point_group and axis_order_str and "N" in point_group:
+        point_group = point_group.replace("N", axis_order_str)
 
-    return reference_energy, ccsd_energy, mo_energies, mo_irreps
+    return reference_energy, ccsd_energy, point_group, mo_energies, mo_irreps
 
 def main():
     if len(sys.argv) < 2:
@@ -130,30 +148,35 @@ def main():
         sys.exit(1)
 
     filename = sys.argv[1]
-    ref_energy, ccsd_energy, energies, irreps = parse_gamess_output(filename)
+    ref_energy, ccsd_energy, point_group, energies, irreps = parse_gamess_output(filename)
 
     print("=== GAMESS Energy & MO Report ===\n")
-
-    # 1) Print the reference (SCF) energy
+    # 1) Reference (SCF) energy
     if ref_energy is not None:
-        print(f"Hartree-Fock (SCF) Energy: {ref_energy:.8f} Hartree")
+        print(f"Hartree-Fock (SCF) Energy:   {ref_energy:.8f} Hartree")
     else:
         print("Hartree-Fock (SCF) energy not found.")
 
-    # 2) Print CCSD energy
+    # 2) CCSD total energy
     if ccsd_energy is not None:
-        print(f"CCSD Energy:              {ccsd_energy:.8f} Hartree")
+        print(f"CCSD Energy:                {ccsd_energy:.8f} Hartree")
     else:
         print("CCSD energy not found.")
 
-    # 3) Print MO energies & irreps
+    # 3) Print point group
+    if point_group:
+        print(f"Point Group Used:           {point_group}")
+    else:
+        print("Point group not found in output.")
+
+    # 4) Print MO energies & irreps
     print("\nMolecular Orbitals (energy + irrep):")
     n = min(len(energies), len(irreps))
     if n == 0:
         print("No MO data found (or recognized) in the output.")
     else:
         for i in range(n):
-            print(f" MO #{i+1:2d}:  Energy = {energies[i]:11.5f}  Irrep = {irreps[i]}")
+            print(f" MO #{i+1:2d}:  Energy = {energies[i]:10.5f}  Irrep = {irreps[i]}")
 
 if __name__ == "__main__":
     main()
