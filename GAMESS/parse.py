@@ -12,70 +12,81 @@ Parse a GAMESS output file for:
 import sys
 import re
 
-def parse_gamess_output(filename):
-    # -------------------------------------------------------------------
-    # Regex patterns
-    # -------------------------------------------------------------------
-    # 1) Reference (SCF) energy
+def parse_reference_energy(lines):
+    """
+    Parse the reference (SCF) energy from the file lines.
+    Returns: float or None
+    """
     re_ref = re.compile(
         r"(?:FINAL\s+(?:ROHF|UHF|HF)\s+ENERGY\s+IS\s+|\bREFERENCE ENERGY:\s+)([-\d\.]+)",
         re.IGNORECASE
     )
+    reference_energy = None
 
-    # 2) CCSD total energy
-    re_ccsd = re.compile(
-        r"^\s*CCSD\s+ENERGY:\s+([-\d\.]+)",
-        re.IGNORECASE
-    )
+    for line in lines:
+        m_ref = re_ref.search(line)
+        if m_ref:
+            reference_energy = float(m_ref.group(1))
+            break  # Stop after first match
 
-    # 3) Point group
+    return reference_energy
+
+def parse_ccsd_energy(lines):
+    """
+    Parse the CCSD total energy from the file lines.
+    Returns: float or None
+    """
+    re_ccsd = re.compile(r"^\s*CCSD\s+ENERGY:\s+([-\d\.]+)", re.IGNORECASE)
+    ccsd_energy = None
+
+    for line in lines:
+        m_ccsd = re_ccsd.search(line)
+        if m_ccsd:
+            ccsd_energy = float(m_ccsd.group(1))
+            break  # Stop after first match
+
+    return ccsd_energy
+
+def parse_point_group(lines):
+    """
+    Parse the point group and the order of the principal axis (for 'N').
+    Returns: point_group (str or None), axis_order_str (str or None)
+    """
     re_pg = re.compile(
         r"THE\s+POINT\s+GROUP\s+OF\s+THE\s+MOLECULE\s+IS\s+(\S+)",
         re.IGNORECASE
     )
-
-    # 4) Order of principal axis
     re_axis_order = re.compile(
         r"THE\s+ORDER\s+OF\s+THE\s+PRINCIPAL\s+AXIS\s+IS\s+(\d+)",
         re.IGNORECASE
     )
 
-    # 5) EOM states (generic format):
-    #    STATE  SPIN   IONIZATION/EA/...  TOTAL ...  CONVERGED
-    #
-    re_eom_state = re.compile(
-        r"^\s*(\d+)\s+(\d+)\s+([-\d\.]+)\s+([-\d\.]+)\s+CONVERGED",
-        re.IGNORECASE
-    )
+    point_group = None
+    axis_order_str = None
 
-    # We'll detect *any* line containing "SUMMARY OF ... EOMCC CALCULATIONS"
-    # That way it doesn't matter if it's DIP-EOMCC, DEA-EOMCC, IP-EOMCC, etc.
-    re_eom_summary_begin = re.compile(
-        r"SUMMARY\s+OF\s+.*EOMCC\s+CALCULATIONS",
-        re.IGNORECASE
-    )
+    for line in lines:
+        m_pg = re_pg.search(line)
+        if m_pg:
+            point_group = m_pg.group(1).upper().strip()
 
-    # -------------------------------------------------------------------
-    # Data containers
-    # -------------------------------------------------------------------
-    reference_energy = None
-    ccsd_energy      = None
-    point_group      = None
-    axis_order_str   = None
+        m_ax = re_axis_order.search(line)
+        if m_ax:
+            axis_order_str = m_ax.group(1).strip()
 
-    mo_energies = []
-    mo_irreps   = []
+    # If there's an axis order, and the point_group has "N", replace it
+    if point_group and axis_order_str and "N" in point_group:
+        point_group = point_group.replace("N", axis_order_str)
 
-    eom_states  = []  # to store (state_index, spin, ion_en, total_en)
+    return point_group
 
-    # Flags to detect blocks
-    in_mo_block       = False
-    in_eom_summary    = False
-    energies_buffer   = None
+def parse_mo_data(lines):
+    """
+    Parse the MO energies and irreps from the EIGENVECTOR or MOLECULAR ORBITALS block.
+    Returns: (mo_energies, mo_irreps), where each is a list.
+    """
+    # Regex helpers
+    irreps_pattern = re.compile(r"^[AB]\d?[g-uG-U](?:\(\d+\))?$")
 
-    # -------------------------------------------------------------------
-    # Helper functions
-    # -------------------------------------------------------------------
     def parse_float_line(line):
         """Try parsing a line of floats (replacing D with E for exponents)."""
         tokens = line.split()
@@ -89,9 +100,6 @@ def parse_gamess_output(filename):
                 return None
         return floats
 
-    # This pattern matches something like "AG", "B1U", "B2G", etc.
-    irreps_pattern = re.compile(r"^[AB]\d?[g-uG-U](?:\(\d+\))?$")
-
     def line_is_irrep_list(line):
         tokens = line.strip().split()
         if not tokens:
@@ -101,85 +109,94 @@ def parse_gamess_output(filename):
                 return False
         return True
 
-    # -------------------------------------------------------------------
-    # Reading the file
-    # -------------------------------------------------------------------
-    with open(filename, 'r') as f:
-        for line in f:
-            # 1) Check reference energy
-            m_ref = re_ref.search(line)
-            if m_ref:
-                reference_energy = float(m_ref.group(1))
+    mo_energies = []
+    mo_irreps = []
 
-            # 2) Check CCSD energy
-            m_ccsd = re_ccsd.search(line)
-            if m_ccsd:
-                ccsd_energy = float(m_ccsd.group(1))
+    in_mo_block = False
+    energies_buffer = None
 
-            # 3) Check for point group
-            m_pg = re_pg.search(line)
-            if m_pg:
-                point_group = m_pg.group(1).upper().strip()
+    for line in lines:
+        upper_line = line.upper()
 
-            # 4) Check for order of principal axis
-            m_ax = re_axis_order.search(line)
-            if m_ax:
-                axis_order_str = m_ax.group(1).strip()
+        # Detect beginning of MO block
+        if ("EIGENVECTOR" in upper_line) or ("MOLECULAR ORBITALS" in upper_line):
+            in_mo_block = True
+            energies_buffer = None
+            continue
 
-            # 5) Detect beginning of the MO block
-            upper_line = line.upper()
-            if ("EIGENVECTOR" in upper_line) or ("MOLECULAR ORBITALS" in upper_line):
-                in_mo_block = True
+        if in_mo_block:
+            raw = line.strip()
+            if not raw:
+                # blank line => skip
+                continue
+
+            # Try to parse a line of floats
+            float_vals = parse_float_line(raw)
+            if float_vals is not None and len(float_vals) > 0:
+                energies_buffer = float_vals
+                continue
+
+            # If line looks like a list of irreps
+            if line_is_irrep_list(raw):
+                tokens = raw.split()
+                # Only extend if energies_buffer and irreps have the same length
+                if energies_buffer and len(tokens) == len(energies_buffer):
+                    mo_energies.extend(energies_buffer)
+                    mo_irreps.extend(tokens)
                 energies_buffer = None
                 continue
 
-            # If inside MO block, parse lines for energies/irreps
-            if in_mo_block:
-                raw = line.strip()
-                if not raw:
-                    continue
+    return mo_energies, mo_irreps
 
-                float_vals = parse_float_line(raw)
-                if float_vals is not None and len(float_vals) > 0:
-                    energies_buffer = float_vals
-                    continue
+def parse_eom_states(lines):
+    """
+    Parse the EOM states (for DIP-EOM, DEA-EOM, IP-EOM, EA-EOM, etc.).
+    Returns: a list of tuples (state_index, spin, ion_en, total_en).
+    """
+    re_eom_summary_begin = re.compile(r"SUMMARY\s+OF\s+.*EOMCC\s+CALCULATIONS", re.IGNORECASE)
+    re_eom_state = re.compile(r"^\s*(\d+)\s+(\d+)\s+([-\d\.]+)\s+([-\d\.]+)\s+CONVERGED", re.IGNORECASE)
 
-                if line_is_irrep_list(raw):
-                    tokens = raw.split()
-                    if energies_buffer and len(tokens) == len(energies_buffer):
-                        mo_energies.extend(energies_buffer)
-                        mo_irreps.extend(tokens)
-                    energies_buffer = None
-                    continue
-                # If the line doesn't match energies or irreps, we ignore.
+    eom_states = []
+    in_eom_summary = False
 
-            # 6) Detect start of EOM summary block
-            #    e.g. "---- SUMMARY OF DIP-EOMCC CALCULATIONS ----"
-            #    or    "---- SUMMARY OF DEA-EOMCC CALCULATIONS ----", etc.
-            if re_eom_summary_begin.search(line):
-                in_eom_summary = True
-                continue
+    for line in lines:
+        # Detect EOM summary block
+        if re_eom_summary_begin.search(line):
+            in_eom_summary = True
+            continue
 
-            # If we are in an EOM summary block, look for lines describing states
-            if in_eom_summary:
-                m_eom = re_eom_state.match(line)
-                if m_eom:
-                    st_idx  = int(m_eom.group(1))
-                    sp_mult = int(m_eom.group(2))
-                    ion_en  = float(m_eom.group(3))
-                    tot_en  = float(m_eom.group(4))
-                    eom_states.append((st_idx, sp_mult, ion_en, tot_en))
-                elif not line.strip():
-                    # blank line => maybe the summary ended
-                    in_eom_summary = False
+        if in_eom_summary:
+            m_eom = re_eom_state.match(line)
+            if m_eom:
+                st_idx = int(m_eom.group(1))
+                sp_mult = int(m_eom.group(2))
+                ion_en = float(m_eom.group(3))
+                tot_en = float(m_eom.group(4))
+                eom_states.append((st_idx, sp_mult, ion_en, tot_en))
+            elif not line.strip():
+                # blank line => maybe the summary ended
+                in_eom_summary = False
 
-    # -------------------------------------------------------------------
-    # If there's an axis order, and the point_group has "N", replace it
-    # -------------------------------------------------------------------
-    if point_group and axis_order_str and "N" in point_group:
-        point_group = point_group.replace("N", axis_order_str)
+    return eom_states
 
-    return reference_energy, ccsd_energy, point_group, mo_energies, mo_irreps, eom_states
+def parse_gamess_output(filename):
+    """
+    Orchestrates all parsing tasks and returns a tuple containing:
+        reference_energy, ccsd_energy, point_group,
+        mo_energies, mo_irreps, eom_states
+    """
+
+    # Read all lines
+    with open(filename, 'r') as f:
+        lines = f.readlines()
+
+    ref_energy = parse_reference_energy(lines)
+    ccsd_energy = parse_ccsd_energy(lines)
+    point_group = parse_point_group(lines)
+    mo_energies, mo_irreps = parse_mo_data(lines)
+    eom_states = parse_eom_states(lines)
+
+    return ref_energy, ccsd_energy, point_group, mo_energies, mo_irreps, eom_states
 
 def main():
     if len(sys.argv) < 2:
