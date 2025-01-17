@@ -129,6 +129,37 @@ def get_calc(f):
             break
                
     return info
+
+def parse_eom_states(f):
+    """
+    Parse the EOM states (for DIP-EOM, DEA-EOM, IP-EOM, EA-EOM, etc.).
+    Returns: a list of tuples (state_index, spin, ion_en, total_en).
+    """
+    re_eom_summary_begin = re.compile(r"SUMMARY\s+OF\s+.*EOMCC\s+CALCULATIONS", re.IGNORECASE)
+    re_eom_state = re.compile(r"^\s*(\d+)\s+(\d+)\s+([-\d\.]+)\s+([-\d\.]+)\s+CONVERGED", re.IGNORECASE)
+
+    eom_states = []
+    in_eom_summary = False
+
+    for line in f:
+        # Detect EOM summary block
+        if re_eom_summary_begin.search(line):
+            in_eom_summary = True
+            continue
+
+        if in_eom_summary:
+            m_eom = re_eom_state.match(line)
+            if m_eom:
+                st_idx = int(m_eom.group(1))
+                sp_mult = int(m_eom.group(2))
+                ion_en = float(m_eom.group(3))
+                tot_en = float(m_eom.group(4))
+                eom_states.append((st_idx, sp_mult, ion_en, tot_en))
+            elif not line.strip():
+                # blank line => maybe the summary ended
+                in_eom_summary = False
+
+    return eom_states
         
 def main():
     if len(sys.argv) < 2:
@@ -186,6 +217,18 @@ def main():
     print("proceeding with further extractions.")
     calc = get_calc(f)
     print(f"{calc} calculation performed")
+    
+    #Print EOM states
+    eom_states=parse_eom_states(f)
+    print(f"=== {calc} States (for DIP, DEA, IP, EA, etc.) ===")
+    if not eom_states:
+        print("No EOM states found in output.")
+    else:
+        print(f"{'State':>5s}  {'mult':>4s}  {'omega (H)':>12s}  {'Total_E (H)':>14s}")
+        for st_idx, sp_mult, ion_en, tot_en in eom_states:
+            print(f"{st_idx:5d}  {sp_mult:4d}  {ion_en:12.6f}  {tot_en:14.6f}")
+            
+    
          
          
 if __name__ == "__main__":
