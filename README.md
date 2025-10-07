@@ -2,6 +2,6 @@
 
 This repository will contain scripts to parse various quantum chemistry software outputs.
 
-## Q-Chem 
+## GAMESS 
 
-This directory contains details about how to analyze Q-Chem output files.
+This directory contains details about how to analyze GAMESS output files.
